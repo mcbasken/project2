@@ -1,0 +1,161 @@
+#include "include/utility.h"
+
+void print_status(out_status os, int pi, int exe){
+
+    FILE *fptr; 
+    fptr = fopen("autograder.out", "w");  // Open "autograder.out"
+    if(fptr == NULL){
+        perror("Error opening autograder file");
+        exit(-1);
+    }
+
+    for (int i = 0; i < exe; i++){  // For each submission:
+
+        if(fprintf(fptr, "%s ", os.paths[i]) < 0){  // Print the name to "autograder.out"
+            perror("Error fprintf failed");
+            exit(-1);
+        }
+
+        for (int j = 0; j < pi; j++){  // For each parameter:
+
+            if(fprintf(fptr, "%d", os.pi[i][j]) < 0){  // Print the parameter to "autograder.out"
+                perror("Error fprintf failed");
+                exit(-1);
+            }
+
+            if(os.status[i][j] == CORRECT){  // And, print the result to "autograder.out"
+                if(fprintf(fptr, "(correct) ") < 0){
+                    perror("Error fprintf failed");
+                    exit(-1);
+                }
+            }
+            if(os.status[i][j] == INCORRECT){
+                if(fprintf(fptr, "(incorrect) ") < 0){
+                    perror("Error fprintf failed");
+                    exit(-1);
+                }
+            }
+            if(os.status[i][j] == CRASH){
+                if(fprintf(fptr, "(crash) ") < 0){
+                    perror("Error fprintf failed");
+                    exit(-1);
+                }
+            }
+        }
+        if(fprintf(fptr, "\n") < 0){  // Newline for next submission
+            perror("Error fprintf failed");
+            exit(-1);
+        }
+    }
+
+    if(fclose(fptr) != 0){  // Close "autograder.out"
+        perror("Error closing autograder file");
+    }
+
+}
+
+
+int main(int argc, char *argv[]) {
+
+    if (argc < 2) {
+        printf("Usage: %s <batch> <p1> <p2> ... <pn>\n", argv[0]);
+        return 1;
+    }
+
+    // Convert the first command-line argument to an integer to determine the batch size
+    int batch_size = atoi(argv[1]);
+
+    // write the file paths from the "solutions" directory into the submissions.txt file
+    write_filepath_to_submissions("solutions", "submissions.txt");
+
+    FILE *fptr;
+    fptr = fopen("submissions.txt", "r");  // Open "submissions.txt"
+    if(fptr == NULL){
+        perror("Error opening submissions file");
+        exit(-1);
+    }
+
+    int submissions = 0;  // Tracks the total number of submissions
+    char word[PATH_MAX];
+
+    while (fgets(word, PATH_MAX, fptr) != NULL){  // Count how many total submissions there are
+        submissions++;
+    }
+    
+    if(fseek(fptr, 0, SEEK_SET) != 0){  // Reset the file pointer to the beginning of "submissions.txt"
+        perror("Error seeking to start of submissions file");
+        exit(-1);
+    }
+
+    int i = 0;  // Tracks which line of the file fptr is on
+    out_status os;  // Tracks solution name, parameters, and exit statuses for each submission
+
+    for (int p = 2; p < argc; p++){  // For each parameter
+        i = 0;
+        while (i < submissions){
+
+            pid_t pids[batch_size];  // Tracks the pid of each child process created
+            int active_children = 0;  // Tracks the number of child processes created
+
+            for (int b = 0; b < batch_size; b++){
+                if(fgets(word, PATH_MAX, fptr) == NULL){  // Exit for loop at EOF
+                    break;
+                }
+
+                word[strcspn(word, "\n")] = 0;  // Strips the newline character from each line, leaving the executable
+                strncpy(os.paths[i+b], word + 10, PATH_MAX);  // Copies the solution name to os
+                os.pi[i+b][p-2] = *argv[p] - '0';  // Copies the parameter to os
+                
+                active_children++;
+                pids[b] = fork();  // Create child process
+
+                if (pids[b] == -1) {
+                    perror("Failed to fork");
+                    return 1;
+                }
+
+                if (pids[b] == 0){
+                    execl(word, word, argv[p], NULL);  // Run executable in the child process
+                    perror("Child failed to exec");
+                    return 1;
+                }
+            }
+
+            int statuses[batch_size];  // Tracks the exit status for each child process
+
+            for (int a = 0; a < active_children; a++){  // For each active child process
+                pid_t childpid = waitpid(pids[a], &(statuses[a]), 0);  // Wait for process
+                if (childpid == -1) {
+                    perror("Failed to wait for child");
+                }
+                int es = WEXITSTATUS(statuses[a]);  // Save exit status
+                if (WIFEXITED(statuses[a])){ 
+                    if (es == 0){
+                        os.status[i+a][p-2] = CORRECT;  // If child exited with 0, then write CORRECT to os
+                    }
+                    if (es == 1){
+                        os.status[i+a][p-2] = INCORRECT;  // If child exited with 1, then write INCORRECT to os
+                    }
+                }
+                else{
+                    os.status[i+a][p-2] = CRASH;  // If child did not exit, then write CRASH to os
+                }
+            }
+            i += active_children;  // Update which line fptr is on
+        }
+
+        if(fseek(fptr, 0, SEEK_SET) != 0){  // Reset fptr to run the next parameter
+            perror("Error seeking to start of submissions file");
+            exit(-1);
+        }
+
+    }
+
+    if(fclose(fptr) != 0){  // Close "submissions.txt"
+        perror("Error closing submissions file");
+    }
+
+    print_status(os, argc-2, submissions);  // Call print_status to produce autograder.out
+
+    return 0;
+}     
