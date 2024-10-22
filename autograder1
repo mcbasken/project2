@@ -1,4 +1,4 @@
-#include "include/utility.h"
+#include "utility.h"
 
 void print_status(out_status os, int pi, int exe){
 
